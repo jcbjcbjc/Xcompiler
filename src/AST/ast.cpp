@@ -1,5 +1,4 @@
 #include "ast.hpp"
-//#include "stdlib.h"
 #include <fstream>
 
 //#define EXCEPTION(msg) Exception(msg)
@@ -36,7 +35,8 @@ std::unordered_map<int, int> level_to_cnt;
 typedef enum {
   CONSTANT,
   VARIABLE,
-
+  POINTER,
+  ARRAY,
   FUNCTION,
   UNDEFINED,
 } value_type;
@@ -73,6 +73,20 @@ void insertSymbol(const std::string& key, value_type type, int value, func_type 
       (*symbol_tables[cur_block])[key] = std::unique_ptr<stored_object>(object_to_store);
       break;
     }
+    case ARRAY: {
+      stored_object* object_to_store = new stored_object();
+      object_to_store->type = ARRAY;
+      object_to_store->value.val = value;
+      (*symbol_tables[cur_block])[key] = std::unique_ptr<stored_object>(object_to_store);
+      break;
+    }
+    case POINTER: {
+      stored_object* object_to_store = new stored_object();
+      object_to_store->type = POINTER;
+      object_to_store->value.val = value;
+      (*symbol_tables[cur_block])[key] = std::unique_ptr<stored_object>(object_to_store);
+      break;
+    }
     case FUNCTION: {
       stored_object* object_to_store = new stored_object();
       object_to_store->type = FUNCTION;
@@ -94,7 +108,7 @@ std::tuple<value_type, int, int, func_type> fetchSymbol(const std::string& key) 
       // cur--;
       continue;
     } else {
-      if ((*symbol_tables[cur])[key]->type == CONSTANT || (*symbol_tables[cur])[key]->type == VARIABLE) {
+      if ((*symbol_tables[cur])[key]->type == CONSTANT || (*symbol_tables[cur])[key]->type == VARIABLE || (*symbol_tables[cur])[key]->type == POINTER || (*symbol_tables[cur])[key]->type == ARRAY) {
         return std::make_tuple((*symbol_tables[cur])[key]->type, (*symbol_tables[cur])[key]->value.val, cur, UND);
       } else if ((*symbol_tables[cur])[key]->type == FUNCTION) {
         return std::make_tuple((*symbol_tables[cur])[key]->type, 0, cur, (*symbol_tables[cur])[key]->value.type);
@@ -108,6 +122,7 @@ std::tuple<value_type, int, int, func_type> fetchSymbol(const std::string& key) 
 }
 
 int search(const ConstExpAST* constExp);
+int search(const InitValAST* initVal);
 int search(const ExpAST* exp);
 int search(const LOrExpAST* lOrExp);
 int search(const LOrExpWithOpAST* lOrExp);
@@ -239,68 +254,173 @@ std::pair<bool, int> ConstDeclAST::Output() const {
   return std::pair<bool, int>(false, 0);
 }
 
+std::vector<int> getSize(const std::vector<std::unique_ptr<BaseAST>>& target) {
+  std::vector<int> ret;
+  for (auto& elem : target) {
+    ret.push_back(search((ConstExpAST*)elem.get()));
+  }
+  return ret;
+}
+
 void ConstDefAST::Dump() const {
   std::cout << "ConstDefAST { ";
   std::cout << "Ident { " << ident << " } ";
-  if (constExp)
-    (*constExp)->Dump();
+  for (auto& constExp : arrayConstExpList) {
+    constExp->Dump();
+  }
   constInitVal->Dump();
   std::cout << "} ";
 }
 
 std::pair<bool, int> ConstDefAST::Output() const {
-  if (constExp) {
-    auto size = search((ConstExpAST*)constExp->get());
-    auto result = ((ConstInitValWithListAST*)constInitVal.get())->prepare();
-    insertSymbol(ident, VARIABLE, 0, UND);
+  if (arrayConstExpList.size() != 0) {
+    auto sizeList = getSize(arrayConstExpList);
+    auto values = ((ConstInitValWithListAST*)constInitVal.get())->prepare(sizeList, 0);
+
+    // Debug
+    // str += "===TEST===\n";
+    // for (int i = 0; i < test.size(); i++) {
+    //   str += std::to_string(test[i]) + " ";
+    //   if (i % sizeList.back() == 3)
+    //     str += "\n";
+    // }
+    // str += "===TEST===\n\n";
+
+    insertSymbol(ident, ARRAY, arrayConstExpList.size(), UND);
     if (is_global_area) {
       str += "global @";
       str += ident;
       str += "_";
       str += std::to_string(cur_block);
-      str += " = alloc [i32, ";
-      str += std::to_string(size);
-      str += "], {";
-      for (int i = 0; i < size; i++) {
-        if (i < result.size())
-          str += std::to_string(result[i]);
-        else
-          str += "0";
-        if (i != size - 1)
+      str += " = alloc ";
+
+      // 生成 alloc 参数
+      auto len = sizeList.size();
+      for (int i = len - 1; i >= 0; i--) {
+        str += "[";
+      }
+      str += "i32";
+      for (int i = len - 1; i >= 0; i--) {
+        str += ", ";
+        str += std::to_string(sizeList[i]);
+        str += "]";
+      }
+
+      str += ", ";
+      std::vector<int> intervals;
+      int inter = 1;
+      for (int i = sizeList.size() - 1; i >= 0; i--) {
+        inter *= sizeList[i];
+        intervals.push_back(inter);
+      }
+      for (int i = 0; i < values.size(); i++) {
+        for (auto interval : intervals) {
+          if (i % interval == 0)
+            str += "{";
+        }
+        str += std::to_string(values[i]);
+        for (auto interval : intervals) {
+          if (i % interval == interval - 1)
+            str += "}";
+        }
+        if (i != values.size() - 1)
           str += ", ";
       }
-      str += "}\n\n";
+      str += "\n\n";
+
     } else {
       str += "\t@";
       str += ident;
       str += "_";
       str += std::to_string(cur_block);
-      str += " = alloc [i32, ";
-      str += std::to_string(size);
-      str += "]\n";
+      str += " = alloc ";
 
-      for (int i = 0; i < size; i++) {
-        str += "\t%";
-        str += std::to_string(cnt);
-        cnt++;
-        str += " = getelemptr @";
-        str += ident;
-        str += "_";
-        str += std::to_string(cur_block);
+      // 生成 alloc 参数
+      auto len = sizeList.size();
+      for (int i = len - 1; i >= 0; i--) {
+        str += "[";
+      }
+      str += "i32";
+      for (int i = len - 1; i >= 0; i--) {
         str += ", ";
-        str += std::to_string(i);
-        str += "\n";
+        str += std::to_string(sizeList[i]);
+        str += "]";
+      }
+      str += "\n";
 
-        str += "\tstore ";
+      if (sizeList.size() > 1) {
+        std::vector<int> intervals;
+        int inter = 1;
+        // 生成间隔数组
+        for (int i = sizeList.size() - 1; i >= 0; i--) {
+          inter *= sizeList[i];
+          intervals.push_back(inter);
+        }
+        std::reverse(intervals.begin(), intervals.end());
+        std::vector current(sizeList.size() - 1, 0);
+        for (int i = 0; i < values.size(); i++) {
+          for (int j = 1; j < intervals.size(); j++) {
+            if (i % intervals[j] == 0) {
+              if (j == 1) {
+                str += "\t%";
+                str += std::to_string(cnt);
+                current[j - 1] = cnt;
+                cnt++;
+                str += " = getelemptr @";
+                str += ident;
+                str += "_";
+                str += std::to_string(cur_block);
+                str += ", ";
+                str += std::to_string(i / intervals[j]);
+                str += "\n";
+              } else {
+                str += "\t%";
+                str += std::to_string(cnt);
+                current[j - 1] = cnt;
+                cnt++;
+                str += " = getelemptr %";
+                str += std::to_string(current[j - 2]);
+                str += ", ";
+                str += std::to_string((i / intervals[j]) % sizeList[j - 1]);
+                str += "\n";
+              }
+            }
+          }
+          str += "\t%";
+          str += std::to_string(cnt);
+          cnt++;
+          str += " = getelemptr %";
+          str += std::to_string(current.back());
+          str += ", ";
+          str += std::to_string(i % intervals.back());
+          str += "\n";
 
-        if (i < result.size())
-          str += std::to_string(result[i]);
-        else
-          str += "0";
+          str += "\tstore ";
+          str += std::to_string(values[i]);
+          str += ", %";
+          str += std::to_string(cnt - 1);
+          str += "\n";
+        }
+      } else {
+        // 一维数组
+        for (int i = 0; i < values.size(); i++) {
+          str += "\t%";
+          str += std::to_string(cnt);
+          cnt++;
+          str += " = getelemptr @";
+          str += ident;
+          str += "_";
+          str += std::to_string(cur_block);
+          str += ", ";
+          str += std::to_string(i);
+          str += "\n";
 
-        str += ", %";
-        str += std::to_string(cnt - 1);
-        str += "\n";
+          str += "\tstore ";
+          str += std::to_string(values[i]);
+          str += ", %";
+          str += std::to_string(cnt - 1);
+          str += "\n";
+        }
       }
     }
   } else {
@@ -323,8 +443,8 @@ std::pair<bool, int> ConstInitValAST::Output() const {
 
 void ConstInitValWithListAST::Dump() const {
   std::cout << "ConstInitValWithListAST { ";
-  for (auto& constExp : constExpList)
-    constExp->Dump();
+  for (auto& constInitVal : constInitValList)
+    constInitVal->Dump();
   std::cout << "} ";
 }
 
@@ -332,12 +452,49 @@ std::pair<bool, int> ConstInitValWithListAST::Output() const {
   return std::pair<bool, int>(false, 0);
 }
 
-std::vector<int> ConstInitValWithListAST::prepare() {
+std::vector<int> ConstInitValWithListAST::prepare(std::vector<int>& sizeList, int level) {
   std::vector<int> vec;
-  for (auto& constExp : constExpList) {
-    auto result = search((ConstExpAST*)constExp.get());
-    vec.push_back(result);
+  // 记录填入整数的数量
+  int num_cnt = 0;
+
+  int total = 1;
+  for (int i = level; i < sizeList.size(); i++) {
+    total *= sizeList[i];
   }
+
+  int lastSize = sizeList.back();
+  for (auto& constInitVal : constInitValList) {
+    auto targetInitVal = constInitVal.get();
+    if (typeid(*targetInitVal) == typeid(ConstInitValAST)) {
+      auto result = ((ConstInitValAST*)constInitVal.get())->Output();
+      vec.push_back(result.second);
+      num_cnt++;
+    } else if (typeid(*targetInitVal) == typeid(ConstInitValWithListAST)) {
+      if (vec.size() % lastSize)
+        assert(false);
+
+      int targetLevel = level;
+      if (vec.size() == 0) {
+        targetLevel += 1;
+      } else {
+        int comp = sizeList.back();
+        int i = sizeList.size() - 1;
+        while (comp <= vec.size()) {
+          comp *= sizeList[i - 1];
+          i--;
+        }
+        targetLevel = i + 1;
+      }
+
+      auto ret = ((ConstInitValWithListAST*)constInitVal.get())->prepare(sizeList, targetLevel);
+      vec.insert(vec.end(), ret.begin(), ret.end());
+      num_cnt += ret.size();
+    }
+  }
+
+  for (int i = num_cnt; i < total; i++)
+    vec.push_back(0);
+
   return vec;
 }
 
@@ -360,31 +517,55 @@ std::pair<bool, int> VarDeclAST::Output() const {
 void VarDefAST::Dump() const {
   std::cout << "VarDefAST { ";
   std::cout << "Ident { " << ident << " } ";
-  if (constExp)
-    (*constExp)->Dump();
+  for (auto& constExp : arrayConstExpList) {
+    constExp->Dump();
+  }
   std::cout << "} ";
 }
 
 std::pair<bool, int> VarDefAST::Output() const {
-  if (constExp) {
-    auto size = search((ConstExpAST*)constExp->get());
-    insertSymbol(ident, VARIABLE, 0, UND);
+  if (arrayConstExpList.size() != 0) {
+    auto sizeList = getSize(arrayConstExpList);
+    insertSymbol(ident, ARRAY, arrayConstExpList.size(), UND);
     if (is_global_area) {
       str += "global @";
       str += ident;
       str += "_";
       str += std::to_string(cur_block);
-      str += " = alloc [i32, ";
-      str += std::to_string(size);
-      str += "], zeroinit\n\n";
+      str += " = alloc ";
+
+      // 生成 alloc 参数
+      auto len = sizeList.size();
+      for (int i = len - 1; i >= 0; i--) {
+        str += "[";
+      }
+      str += "i32";
+      for (int i = len - 1; i >= 0; i--) {
+        str += ", ";
+        str += std::to_string(sizeList[i]);
+        str += "]";
+      }
+
+      str += ", zeroinit\n\n";
     } else {
       str += "\t@";
       str += ident;
       str += "_";
       str += std::to_string(cur_block);
-      str += " = alloc [i32, ";
-      str += std::to_string(size);
-      str += "]\n";
+      str += " = alloc ";
+
+      // 生成 alloc 参数
+      auto len = sizeList.size();
+      for (int i = len - 1; i >= 0; i--) {
+        str += "[";
+      }
+      str += "i32";
+      for (int i = len - 1; i >= 0; i--) {
+        str += ", ";
+        str += std::to_string(sizeList[i]);
+        str += "]";
+      }
+      str += "\n";
     }
   } else {
     if (is_global_area) {
@@ -400,83 +581,172 @@ std::pair<bool, int> VarDefAST::Output() const {
       str += std::to_string(cur_block);
       str += " = alloc i32\n";
     }
+
+    insertSymbol(ident, VARIABLE, 0, UND);
   }
 
-  insertSymbol(ident, VARIABLE, 0, UND);
   return std::pair<bool, int>(false, 0);
 }
 
 void VarDefWithAssignAST::Dump() const {
   std::cout << "VarDefWithAssignAST { ";
-  std::cout << "Ident { " << ident << "} ";
-  if (constExp)
-    (*constExp)->Dump();
+  std::cout << "Ident { " << ident << " } ";
+  for (auto& constExp : arrayConstExpList) {
+    constExp->Dump();
+  }
   initVal->Dump();
   std::cout << " } ";
 }
 
 std::pair<bool, int> VarDefWithAssignAST::Output() const {
-  if (constExp) {
-    auto size = search((ConstExpAST*)constExp->get());
-    auto result = ((InitValWithListAST*)initVal.get())->prepare();
-    insertSymbol(ident, VARIABLE, 0, UND);
+  if (arrayConstExpList.size() != 0) {
+    auto sizeList = getSize(arrayConstExpList);
+    auto values = ((InitValWithListAST*)initVal.get())->prepare(sizeList, 0);
+
+    insertSymbol(ident, ARRAY, arrayConstExpList.size(), UND);
     if (is_global_area) {
       str += "global @";
       str += ident;
       str += "_";
       str += std::to_string(cur_block);
-      str += " = alloc [i32, ";
-      str += std::to_string(size);
-      str += "], {";
-      for (int i = 0; i < size; i++) {
-        if (i < result.size()) {
-          if (!result[i].first)
-            assert(false);
-          str += std::to_string(result[i].second);
-        } else {
-          str += "0";
+      str += " = alloc ";
+
+      // 生成 alloc 参数
+      auto len = sizeList.size();
+      for (int i = len - 1; i >= 0; i--) {
+        str += "[";
+      }
+      str += "i32";
+      for (int i = len - 1; i >= 0; i--) {
+        str += ", ";
+        str += std::to_string(sizeList[i]);
+        str += "]";
+      }
+
+      str += ", ";
+      std::vector<int> intervals;
+      int inter = 1;
+      for (int i = sizeList.size() - 1; i >= 0; i--) {
+        inter *= sizeList[i];
+        intervals.push_back(inter);
+      }
+      for (int i = 0; i < values.size(); i++) {
+        for (auto interval : intervals) {
+          if (i % interval == 0)
+            str += "{";
         }
-        if (i != size - 1)
+        if (!values[i].first)
+          assert(false);
+        str += std::to_string(values[i].second);
+        for (auto interval : intervals) {
+          if (i % interval == interval - 1)
+            str += "}";
+        }
+        if (i != values.size() - 1)
           str += ", ";
       }
-      str += "}\n\n";
+      str += "\n\n";
     } else {
       str += "\t@";
       str += ident;
       str += "_";
       str += std::to_string(cur_block);
-      str += " = alloc [i32, ";
-      str += std::to_string(size);
-      str += "]\n";
+      str += " = alloc ";
 
-      for (int i = 0; i < size; i++) {
-        str += "\t%";
-        str += std::to_string(cnt);
-        cnt++;
-        str += " = getelemptr @";
-        str += ident;
-        str += "_";
-        str += std::to_string(cur_block);
+      // 生成 alloc 参数
+      auto len = sizeList.size();
+      for (int i = len - 1; i >= 0; i--) {
+        str += "[";
+      }
+      str += "i32";
+      for (int i = len - 1; i >= 0; i--) {
         str += ", ";
-        str += std::to_string(i);
-        str += "\n";
+        str += std::to_string(sizeList[i]);
+        str += "]";
+      }
+      str += "\n";
 
-        str += "\tstore ";
+      if (sizeList.size() > 1) {
+        std::vector<int> intervals;
+        int inter = 1;
+        // 生成间隔数组
+        for (int i = sizeList.size() - 1; i >= 0; i--) {
+          inter *= sizeList[i];
+          intervals.push_back(inter);
+        }
+        std::reverse(intervals.begin(), intervals.end());
+        std::vector current(sizeList.size() - 1, 0);
+        for (int i = 0; i < values.size(); i++) {
+          for (int j = 1; j < intervals.size(); j++) {
+            if (i % intervals[j] == 0) {
+              if (j == 1) {
+                str += "\t%";
+                str += std::to_string(cnt);
+                current[j - 1] = cnt;
+                cnt++;
+                str += " = getelemptr @";
+                str += ident;
+                str += "_";
+                str += std::to_string(cur_block);
+                str += ", ";
+                str += std::to_string(i / intervals[j]);
+                str += "\n";
+              } else {
+                str += "\t%";
+                str += std::to_string(cnt);
+                current[j - 1] = cnt;
+                cnt++;
+                str += " = getelemptr %";
+                str += std::to_string(current[j - 2]);
+                str += ", ";
+                str += std::to_string((i / intervals[j]) % sizeList[j - 1]);
+                str += "\n";
+              }
+            }
+          }
+          str += "\t%";
+          str += std::to_string(cnt);
+          cnt++;
+          str += " = getelemptr %";
+          str += std::to_string(current.back());
+          str += ", ";
+          str += std::to_string(i % intervals.back());
+          str += "\n";
 
-        if (i < result.size()) {
-          if (result[i].first) {
-            str += std::to_string(result[i].second);
+          str += "\tstore ";
+          if (values[i].first)
+            str += std::to_string(values[i].second);
+          else
+            str += "%" + std::to_string(values[i].second);
+          str += ", %";
+          str += std::to_string(cnt - 1);
+          str += "\n";
+        }
+      } else {
+        // 一维数组
+        for (int i = 0; i < values.size(); i++) {
+          str += "\t%";
+          str += std::to_string(cnt);
+          cnt++;
+          str += " = getelemptr @";
+          str += ident;
+          str += "_";
+          str += std::to_string(cur_block);
+          str += ", ";
+          str += std::to_string(i);
+          str += "\n";
+
+          str += "\tstore ";
+          if (values[i].first) {
+            str += std::to_string(values[i].second);
           } else {
             str += "%";
-            str += std::to_string(result[i].second);
+            str += std::to_string(values[i].second);
           }
-        } else {
-          str += "0";
+          str += ", %";
+          str += std::to_string(cnt - 1);
+          str += "\n";
         }
-
-        str += ", %";
-        str += std::to_string(cnt - 1);
-        str += "\n";
       }
     }
   } else {
@@ -536,8 +806,8 @@ std::pair<bool, int> InitValAST::Output() const {
 
 void InitValWithListAST::Dump() const {
   std::cout << "InitValWithListAST { ";
-  for (auto& exp : expList)
-    exp->Dump();
+  for (auto& initVal : initValList)
+    initVal->Dump();
   std::cout << "} ";
 }
 
@@ -545,17 +815,58 @@ std::pair<bool, int> InitValWithListAST::Output() const {
   return std::make_pair(false, 0);
 }
 
-std::vector<std::pair<bool, int>> InitValWithListAST::prepare() {
+std::vector<std::pair<bool, int>> InitValWithListAST::prepare(std::vector<int>& sizeList, int level) {
   std::vector<std::pair<bool, int>> vec;
-  for (auto& exp : expList) {
-    auto result = exp->Output();
-    int cur = cnt - 1;
-    if (result.first) {
-      vec.push_back(std::make_pair(true, result.second));
-    } else {
-      vec.push_back(std::make_pair(false, cur));
+  // 记录填入整数的数量
+  int num_cnt = 0;
+
+  int total = 1;
+  for (int i = level; i < sizeList.size(); i++) {
+    total *= sizeList[i];
+  }
+
+  int lastSize = sizeList.back();
+  for (auto& initVal : initValList) {
+    auto targetInitVal = initVal.get();
+    if (typeid(*targetInitVal) == typeid(InitValAST)) {
+      if (is_global_area) {
+        int result = search((InitValAST*)initVal.get());
+        vec.push_back(std::make_pair(true, result));
+      } else {
+        auto result = ((InitValAST*)initVal.get())->Output();
+        if (result.first)
+          vec.push_back(result);
+        else
+          vec.push_back(std::make_pair(false, cnt - 1));
+      }
+
+      num_cnt++;
+    } else if (typeid(*targetInitVal) == typeid(InitValWithListAST)) {
+      if (vec.size() % lastSize)
+        assert(false);
+
+      int targetLevel = level;
+      if (vec.size() == 0) {
+        targetLevel += 1;
+      } else {
+        int comp = sizeList.back();
+        int i = sizeList.size() - 1;
+        while (comp <= vec.size()) {
+          comp *= sizeList[i - 1];
+          i--;
+        }
+        targetLevel = i + 1;
+      }
+
+      auto ret = ((InitValWithListAST*)initVal.get())->prepare(sizeList, targetLevel);
+      vec.insert(vec.end(), ret.begin(), ret.end());
+      num_cnt += ret.size();
     }
   }
+
+  for (int i = num_cnt; i < total; i++)
+    vec.push_back(std::make_pair(true, 0));
+
   return vec;
 }
 
@@ -645,16 +956,37 @@ void FuncFParamAST::Dump() const {
   std::cout << "FuncFParamAST { ";
   std::cout << "BTypeAST { " << bType << " } ";
   std::cout << "Ident { " << ident << " } ";
+  for (auto& constExp : arrayConstExpList) {
+    constExp->Dump();
+  }
   std::cout << "} ";
 }
 
 std::pair<bool, int> FuncFParamAST::Output() const {
   str += "@";
   str += ident;
-  if (bType == "int")
-    str += ": i32";
-  else
+  if (bType == "int") {
+    if (isArray) {
+      auto sizeList = getSize(arrayConstExpList);
+      str += ": *";
+
+      auto len = sizeList.size();
+      for (int i = len - 1; i >= 0; i--) {
+        str += "[";
+      }
+      str += "i32";
+      for (int i = len - 1; i >= 0; i--) {
+        str += ", ";
+        str += std::to_string(sizeList[i]);
+        str += "]";
+      }
+    } else {
+      str += ": i32";
+    }
+
+  } else {
     assert(false);
+  }
   return std::pair<bool, int>(false, 0);
 }
 
@@ -663,8 +995,27 @@ void FuncFParamAST::declare() {
   str += ident;
   str += "_";
   str += std::to_string(cur_block);
-  str += " = alloc i32\n";
-  str += "\tstore @";
+  str += " = alloc ";
+
+  if (isArray) {
+    auto sizeList = getSize(arrayConstExpList);
+    str += "*";
+
+    auto len = sizeList.size();
+    for (int i = len - 1; i >= 0; i--) {
+      str += "[";
+    }
+    str += "i32";
+    for (int i = len - 1; i >= 0; i--) {
+      str += ", ";
+      str += std::to_string(sizeList[i]);
+      str += "]";
+    }
+  } else {
+    str += "i32";
+  }
+
+  str += "\n\tstore @";
   str += ident;
   str += ", @";
   str += ident;
@@ -672,7 +1023,10 @@ void FuncFParamAST::declare() {
   str += std::to_string(cur_block);
   str += "\n";
 
-  insertSymbol(ident, VARIABLE, 0, UND);
+  if (isArray)
+    insertSymbol(ident, POINTER, arrayConstExpList.size() + 1, UND);
+  else
+    insertSymbol(ident, VARIABLE, 0, UND);
 }
 
 void BlockAST::Dump() const {
@@ -737,25 +1091,35 @@ std::pair<bool, int> StmtWithAssignAST::Output() const {
   auto ident = ((LValAST*)lVal.get())->ident;
   auto fetch_result = fetchSymbol(ident);
 
-  if (std::get<0>(fetch_result) != VARIABLE) {
+  if (std::get<0>(fetch_result) == CONSTANT || std::get<0>(fetch_result) == UNDEFINED) {
       std::string msg = "undefined variable:" + ident + "\n";
       Exception(msg);
     assert(false);
   }
 
   std::pair<bool, int> result = exp->Output();
+  int exp_cnt = cnt - 1;
 
-  if (result.first) {
-    str += "\tstore ";
-    str += std::to_string(result.second);
-    str += ", @";
-    str += ident;
-    str += "_";
-    str += std::to_string(std::get<2>(fetch_result));
+  if (std::get<0>(fetch_result) == ARRAY || std::get<0>(fetch_result) == POINTER) {
+    int location = ((LValAST*)lVal.get())->getLocation();
+    if (result.first) {
+      str += "\tstore ";
+      str += std::to_string(result.second);
+    } else {
+      str += "\tstore %";
+      str += std::to_string(exp_cnt);
+    }
+    str += ", %";
+    str += std::to_string(location);
     str += "\n";
   } else {
-    str += "\tstore %";
-    str += std::to_string(cnt - 1);
+    if (result.first) {
+      str += "\tstore ";
+      str += std::to_string(result.second);
+    } else {
+      str += "\tstore %";
+      str += std::to_string(exp_cnt);
+    }
     str += ", @";
     str += ident;
     str += "_";
@@ -969,9 +1333,8 @@ void StmtWithBreakAST::Dump() const {
 }
 
 std::pair<bool, int> StmtWithBreakAST::Output() const {
-  if (while_level < 0){
-      assert(false);
-  }
+  if (while_level < 0)
+    assert(false);
 
   str += "\tjump %while_";
   str += std::to_string(level_to_cnt[while_level]);
@@ -1042,32 +1405,135 @@ std::pair<bool, int> ExpAST::Output() const {
 
 void LValAST::Dump() const {
   std::cout << "LValAST { ";
-  std::cout << ident;
-  if (exp)
-    (*exp)->Dump();
+  std::cout << "Ident { " << ident << " } ";
+  for (auto& exp : arrayExpList) {
+    exp->Dump();
+  }
   std::cout << " } ";
 }
 
-std::pair<bool, int> LValAST::Output() const {
-  if (exp) {
-    auto result = fetchSymbol(ident);
-    auto size = (*exp)->Output();
-    if (std::get<0>(result) == UNDEFINED)
-      assert(false);
-    str += "\t%";
-    str += std::to_string(cnt);
-    cnt++;
-    str += " = getelemptr @";
-    str += ident;
-    str += "_";
-    str += std::to_string(cur_block);
-    str += ", ";
-    if (!size.first)
-      assert(false);
-    str += std::to_string(size.second);
-    str += "\n";
+std::vector<std::pair<bool, int>> LValAST::prepare() const {
+  std::vector<std::pair<bool, int>> vec;
+  for (auto& exp : arrayExpList) {
+    auto result = exp->Output();
+    int cur = cnt - 1;
+    if (result.first) {
+      vec.push_back(result);
+    } else {
+      vec.push_back(std::make_pair(false, cur));
+    }
+  }
+  return vec;
+}
+
+int LValAST::getLocation() const {
+  int ret = 0;
+  auto result = fetchSymbol(ident);
+  auto paraList = this->prepare();
+  if (paraList.size() > 0) {
+    for (int i = 0; i < paraList.size(); i++) {
+      if (i == 0) {
+        if (std::get<0>(result) == POINTER) {
+          str += "\t%" + std::to_string(cnt) + " = load @";
+          cnt++;
+          str += ident;
+          str += "_";
+          str += std::to_string(std::get<2>(result));
+
+          str += "\n\t%";
+          str += std::to_string(cnt);
+          cnt++;
+          str += " = getptr %" + std::to_string(cnt - 2);
+
+        } else {
+          str += "\t%";
+          str += std::to_string(cnt);
+          cnt++;
+          str += " = getelemptr @";
+          str += ident;
+          str += "_";
+          str += std::to_string(std::get<2>(result));
+        }
+
+        str += ", ";
+        if (paraList[i].first) {
+          str += std::to_string(paraList[i].second);
+        } else {
+          str += "%" + std::to_string(paraList[i].second);
+        }
+        str += "\n";
+      } else {
+        str += "\t%";
+        str += std::to_string(cnt);
+        cnt++;
+        str += " = getelemptr ";
+        str += "%" + std::to_string(cnt - 2);
+        str += ", ";
+        if (paraList[i].first) {
+          str += std::to_string(paraList[i].second);
+        } else {
+          str += "%" + std::to_string(paraList[i].second);
+        }
+        str += "\n";
+      }
+    }
+
+    ret = cnt - 1;
+
   } else {
-    auto result = fetchSymbol(ident);
+    if (std::get<0>(result) == POINTER) {
+      str += "\t%" + std::to_string(cnt) + " = load @";
+      cnt++;
+      str += ident;
+      str += "_";
+      str += std::to_string(std::get<2>(result));
+      str += "\n";
+    } else {
+      str += "\t%";
+      str += std::to_string(cnt);
+      cnt++;
+      str += " = getelemptr @";
+      str += ident;
+      str += "_";
+      str += std::to_string(std::get<2>(result));
+      str += ", 0\n";
+    }
+    ret = cnt - 1;
+  }
+  return ret;
+}
+
+std::pair<bool, int> LValAST::Output() const {
+  auto result = fetchSymbol(ident);
+  if (std::get<0>(result) == UNDEFINED)
+    // 出现未定义的 ident
+    assert(false);
+
+  if (std::get<0>(result) == ARRAY || std::get<0>(result) == POINTER) {
+    if (arrayExpList.size() == std::get<1>(result)) {
+      int location = this->getLocation();
+
+      str += "\t%";
+      str += std::to_string(cnt);
+      cnt++;
+      str += " = load %";
+      str += std::to_string(location);
+      str += "\n";
+
+    } else {
+      int location = this->getLocation();
+
+      if (arrayExpList.size() != 0) {
+        str += "\t%";
+        str += std::to_string(cnt);
+        cnt++;
+        str += " = getelemptr %";
+        str += std::to_string(location);
+        str += ", 0\n";
+      }
+    }
+
+  } else {
     if (std::get<0>(result) == CONSTANT)
       return std::pair<bool, int>(true, std::get<1>(result));
     else if (std::get<0>(result) == VARIABLE) {
@@ -1158,7 +1624,7 @@ std::pair<bool, int> UnaryExpWithFuncAST::Output() const {
     }
     default:
         std::string msg = "\tundefined func:" + ident + "\n";
-        Exception(msg);
+          Exception(msg);
       assert(false);
       break;
   }
@@ -1843,6 +2309,10 @@ int search(const ConstExpAST* constExp) {
   return search((ExpAST*)constExp->exp.get());
 }
 
+int search(const InitValAST* initVal) {
+  return search((ExpAST*)initVal->exp.get());
+}
+
 int search(const ExpAST* exp) {
   auto lOrExp = exp->lOrExp.get();
   if (typeid(*lOrExp) == typeid(LOrExpAST))
@@ -1980,7 +2450,6 @@ int search(const RelExpWithOpAST* relExp) {
       Exception(msg);
       assert(false);
   }
-
   return 0;
 }
 
@@ -2012,11 +2481,12 @@ int search(const AddExpWithOpAST* addExp) {
     return lhs + rhs;
   else if (addExp->addOp == '-')
     return lhs - rhs;
-  else{
+  else {
       std::string msg = "unknown op:" + std::string(1, addExp->addOp) + "\n";
       Exception(msg);
       assert(false);
   }
+
   return 0;
 }
 

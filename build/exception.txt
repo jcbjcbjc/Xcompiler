@@ -1,4 +1,5 @@
-
-
+undefined func:func
+undefined func:fun
+undefined func:fun
 undefined variable:a
 

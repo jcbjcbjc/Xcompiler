@@ -14,7 +14,6 @@ using namespace std;
 
 string str;
 
-// 声明 lexer 的输入, 以及 parser 函数
 extern FILE* yyin;
 extern int yyparse(unique_ptr<BaseAST>& ast);
 
@@ -70,7 +69,7 @@ int main(int argc, const char* argv[]) {
     // 释放 Koopa IR 程序占用的内存
     koopa_delete_program(program);
 
-    CodeGen(raw);
+    Visit(raw);
 
     // 处理完成, 释放 raw program builder 占用的内存
     // 注意, raw program 中所有的指针指向的内存均为 raw program builder 的内存

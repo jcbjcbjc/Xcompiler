@@ -6,15 +6,8 @@
 
 #include <cstdlib>
 #include <string>
-
-// 因为 Flex 会用到 Bison 中关于 token 的定义
-// 所以需要 include Bison 生成的头文件
 #include "sysy.tab.hpp"
-
-// #include "ast.h"
-
 using namespace std;
-
 %}
 
 /* 空白符和注释 */
@@ -32,10 +25,12 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 
 %%
 
+/* 空白符和注释 */
 {WhiteSpace}    { /* 忽略, 不做任何操作 */ }
 {LineComment}   { /* 忽略, 不做任何操作 */ }
 {BlockComment}  { /* 忽略, 不做任何操作 */ }
 
+/* 关键字 */
 "const"         { return CONST; }
 "void"          { return VOID; }
 "int"           { return INT; }
@@ -51,7 +46,5 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 {Decimal}       { yylval.int_val = strtol(yytext, nullptr, 0); return INT_CONST; }
 {Octal}         { yylval.int_val = strtol(yytext, nullptr, 0); return INT_CONST; }
 {Hexadecimal}   { yylval.int_val = strtol(yytext, nullptr, 0); return INT_CONST; }
-
 .               { return yytext[0]; }
-
 %%

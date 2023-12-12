@@ -48,7 +48,7 @@ extern int yydebug;
 
   #include <memory>
   #include <string>
-  #include "AST/ast.hpp"
+  #include "ast.hpp"
 
 #line 54 "/root/compiler/build/sysy.tab.hpp"
 

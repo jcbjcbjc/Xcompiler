@@ -5,6 +5,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <iterator>
+#include <algorithm>
 #include "../IR/koopa.h"
 
 extern std::string str;
@@ -74,7 +76,7 @@ class ConstDeclAST : public BaseAST {
 class ConstDefAST : public BaseAST {
  public:
   std::string ident;
-  std::optional<std::unique_ptr<BaseAST>> constExp;
+  std::vector<std::unique_ptr<BaseAST>> arrayConstExpList;
   std::unique_ptr<BaseAST> constInitVal;
 
   void Dump() const override;
@@ -91,11 +93,11 @@ class ConstInitValAST : public BaseAST {
 
 class ConstInitValWithListAST : public BaseAST {
  public:
-  std::vector<std::unique_ptr<BaseAST>> constExpList;
+  std::vector<std::unique_ptr<BaseAST>> constInitValList;
 
   void Dump() const override;
   std::pair<bool, int> Output() const override;
-  std::vector<int> prepare();
+  std::vector<int> prepare(std::vector<int>& sizeList, int level);
 };
 
 class VarDeclAST : public BaseAST {
@@ -110,7 +112,7 @@ class VarDeclAST : public BaseAST {
 class VarDefAST : public BaseAST {
  public:
   std::string ident;
-  std::optional<std::unique_ptr<BaseAST>> constExp;
+  std::vector<std::unique_ptr<BaseAST>> arrayConstExpList;
 
   void Dump() const override;
   std::pair<bool, int> Output() const override;
@@ -119,7 +121,7 @@ class VarDefAST : public BaseAST {
 class VarDefWithAssignAST : public BaseAST {
  public:
   std::string ident;
-  std::optional<std::unique_ptr<BaseAST>> constExp;
+  std::vector<std::unique_ptr<BaseAST>> arrayConstExpList;
   std::unique_ptr<BaseAST> initVal;
 
   void Dump() const override;
@@ -136,11 +138,11 @@ class InitValAST : public BaseAST {
 
 class InitValWithListAST : public BaseAST {
  public:
-  std::vector<std::unique_ptr<BaseAST>> expList;
+  std::vector<std::unique_ptr<BaseAST>> initValList;
 
   void Dump() const override;
   std::pair<bool, int> Output() const override;
-  std::vector<std::pair<bool, int>> prepare();
+  std::vector<std::pair<bool, int>> prepare(std::vector<int>& sizeList, int level);
 };
 
 class FuncDefAST : public BaseAST {
@@ -168,6 +170,8 @@ class FuncFParamAST : public BaseAST {
  public:
   std::string bType;
   std::string ident;
+  bool isArray = false;
+  std::vector<std::unique_ptr<BaseAST>> arrayConstExpList;
 
   void Dump() const override;
   std::pair<bool, int> Output() const override;
@@ -274,9 +278,11 @@ class ExpAST : public BaseAST {
 class LValAST : public BaseAST {
  public:
   std::string ident;
-  std::optional<std::unique_ptr<BaseAST>> exp;
+  std::vector<std::unique_ptr<BaseAST>> arrayExpList;
 
   void Dump() const override;
+  std::vector<std::pair<bool, int>> prepare() const;
+  int getLocation() const;
   std::pair<bool, int> Output() const override;
 };
 
